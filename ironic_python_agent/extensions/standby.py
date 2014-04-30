@@ -25,6 +25,7 @@ from ironic_python_agent import errors
 from ironic_python_agent.extensions import base
 from ironic_python_agent import hardware
 from ironic_python_agent.openstack.common import log
+from ironic_python_agent.openstack.common import processutils
 from ironic_python_agent import utils
 
 LOG = log.getLogger(__name__)
@@ -50,9 +51,14 @@ def _write_image(image_info, device):
     script = _path_to_script('shell/write_image.sh')
     command = ['/bin/bash', script, image, device]
     LOG.info('Writing image with command: {0}'.format(' '.join(command)))
-    exit_code = utils.execute(*command)
-    if exit_code != 0:
-        raise errors.ImageWriteError(exit_code, device)
+    try:
+        stdout, stderr = utils.execute(*command, check_exit_code=[0])
+    except processutils.ProcessExecutionError as e:
+        raise errors.ImageWriteError(stdout=e.stdout,
+                                     stderr=e.stderr,
+                                     exit_code=e.exit_code,
+                                     cmd=e.cmd,
+                                     description=e.description)
     totaltime = time.time() - starttime
     LOG.info('Image {0} written to device {1} in {2} seconds'.format(
              image, device, totaltime))
@@ -82,10 +88,15 @@ def _write_configdrive_to_partition(configdrive, device):
     command = ['/bin/bash', script, filename, device]
     LOG.info('copying configdrive to disk with command {0}'.format(
              ' '.join(command)))
-    exit_code = utils.execute(*command)
 
-    if exit_code != 0:
-        raise errors.ConfigDriveWriteError(exit_code, device)
+    try:
+        stdout, stderr = utils.execute(*command, check_exit_code=[0])
+    except processutils.ProcessExecutionError as e:
+        raise errors.ConfigDriveWriteError(stdout=e.stdout,
+                                           stderr=e.stderr,
+                                           exit_code=e.exit_code,
+                                           cmd=e.cmd,
+                                           description=e.description)
 
     totaltime = time.time() - starttime
     LOG.info('configdrive copied from {0} to {1} in {2} seconds'.format(
@@ -203,6 +214,11 @@ class StandbyExtension(base.BaseAgentExtension):
         LOG.info('Rebooting system')
         command = ['/bin/bash', script]
         # this should never return if successful
-        exit_code = utils.execute(*command)
-        if exit_code != 0:
-            raise errors.SystemRebootError(exit_code)
+        try:
+            stdout, stderr = utils.execute(*command, check_exit_code=[0])
+        except processutils.ProcessExecutionError as e:
+            raise errors.SystemRebootError(stdout=e.stdout,
+                                           stderr=e.stderr,
+                                           exit_code=e.exit_code,
+                                           cmd=e.cmd,
+                                           description=e.description)
