@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from ironic_python_agent import encoding
+from ironic_python_agent.openstack.common import processutils
 
 
 class RESTError(Exception, encoding.Serializable):
@@ -136,15 +137,8 @@ class ImageChecksumError(RESTError):
         self.details = self.details.format(image_id)
 
 
-class ImageWriteError(RESTError):
+class ImageWriteError(processutils.ProcessExecutionError, RESTError):
     """Error raised when an image cannot be written to a device."""
-
-    message = 'Error writing image to device.'
-
-    def __init__(self, exit_code, device):
-        super(ImageWriteError, self).__init__()
-        self.details = 'Writing image to device {0} failed with exit code {1}.'
-        self.details = self.details.format(device, exit_code)
 
 
 class ConfigDriveTooLargeError(RESTError):
@@ -158,30 +152,14 @@ class ConfigDriveTooLargeError(RESTError):
         self.details = details
 
 
-class ConfigDriveWriteError(RESTError):
+class ConfigDriveWriteError(processutils.ProcessExecutionError, RESTError):
     """Error raised when a configdrive directory cannot be written to a
     device.
     """
 
-    message = 'Error writing configdrive to device.'
 
-    def __init__(self, exit_code, device):
-        details = 'Writing configdrive to device {0} failed with exit code ' \
-                  '{1}.'
-        details = details.format(device, exit_code)
-        super(ConfigDriveWriteError, self).__init__(details)
-        self.details = details
-
-
-class SystemRebootError(RESTError):
+class SystemRebootError(processutils.ProcessExecutionError, RESTError):
     """Error raised when a system cannot reboot."""
-
-    message = 'Error rebooting system.'
-
-    def __init__(self, exit_code):
-        super(SystemRebootError, self).__init__()
-        self.details = 'Reboot script failed with exit code {0}.'
-        self.details = self.details.format(exit_code)
 
 
 class ExtensionError(Exception):
