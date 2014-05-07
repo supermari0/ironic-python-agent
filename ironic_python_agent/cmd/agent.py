@@ -180,7 +180,11 @@ cli_opts = [
 
     cfg.StrOpt('driver-name',
                   default=KPARAMS.get('ipa-driver-name', 'agent_ipmitool'),
-                  help='The Ironic driver in use for this node')
+                  help='The Ironic driver in use for this node'),
+
+    cfg.FloatOpt('lldp-timeout',
+                 default=KPARAMS.get('lldp-timeout', 30.0),
+                 help='The amount of seconds to wait for LLDP packets.')
 ]
 
 CONF.register_cli_opts(cli_opts)
