@@ -162,5 +162,15 @@ class SystemRebootError(processutils.ProcessExecutionError, RESTError):
     """Error raised when a system cannot reboot."""
 
 
+class BlockDeviceEraseError(RESTError):
+    """Error raised when an error occurs erasing a block device."""
+
+    message = 'Error erasing block device'
+
+    def __init__(self, details):
+        super(BlockDeviceEraseError, self).__init__(details)
+        self.details = details
+
+
 class ExtensionError(Exception):
     pass
