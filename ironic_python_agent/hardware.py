@@ -287,7 +287,7 @@ class GenericHardwareManager(HardwareManager):
 def _compare_extensions(ext1, ext2):
     mgr1 = ext1.obj
     mgr2 = ext2.obj
-    return mgr1.evaluate_hardware_support() - mgr2.evaluate_hardware_support()
+    return mgr2.evaluate_hardware_support() - mgr1.evaluate_hardware_support()
 
 
 def get_manager():
