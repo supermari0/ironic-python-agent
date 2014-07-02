@@ -247,3 +247,7 @@ class UnknownNodeError(Exception):
         if message is not None:
             self.message = message
         super(UnknownNodeError, self).__init__(self.message)
+
+
+class DecommissionError(RESTError):
+    message = 'Agent failed to decommission.'
