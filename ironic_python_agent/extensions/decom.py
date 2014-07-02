@@ -20,7 +20,19 @@ class DecomExtension(base.BaseAgentExtension):
     def __init__(self):
         super(DecomExtension, self).__init__()
         self.command_map['erase_hardware'] = self.erase_hardware
+        self.command_map['decommission'] = self.decommission
+
+    def get_decom_steps(self):
+        """Get a list of functions to call to decommission this hardware.
+
+        These will be defined by the hardware manager.
+        """
+        pass
 
     @base.async_command()
     def erase_hardware(self):
-        hardware.get_manager().erase_devices()
+        return hardware.get_manager().erase_devices()
+
+    @base.async_command()
+    def decommission(self, driver_info):
+        return hardware.get_manager().decommission(driver_info)
