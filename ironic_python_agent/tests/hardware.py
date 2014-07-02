@@ -348,9 +348,9 @@ class TestGenericHardwareManager(test_base.BaseTestCase):
         mocked_execute.assert_has_calls([
             mock.call('hdparm', '-I', '/dev/sda'),
             mock.call('hdparm', '--user-master', 'u', '--security-set-pass',
-                      'NULL', '/dev/sda'),
+                      'NULL', '/dev/sda', check_exit_code=[0]),
             mock.call('hdparm', '--user-master', 'u', '--security-erase',
-                      'NULL', '/dev/sda'),
+                      'NULL', '/dev/sda', check_exit_code=[0]),
             mock.call('hdparm', '-I', '/dev/sda'),
         ])
 
@@ -450,3 +450,281 @@ class TestGenericHardwareManager(test_base.BaseTestCase):
         self.assertRaises(errors.BlockDeviceEraseError,
                           self.hardware.erase_block_device,
                           block_device)
+
+
+class TestDecommission(test_base.BaseTestCase):
+    def setUp(self):
+        super(TestDecommission, self).setUp()
+        self.next_target = {
+            'decommission_next_state': 'fake_next',
+            'reboot_requested': True
+        }
+        self.decommission_steps = [
+            {
+                'state': 'update_bios',
+                'function': 'update_bios',
+                'priority': 10,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'update_firmware',
+                'function': 'update_firmware',
+                'priority': 20,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'erase_hardware',
+                'function': 'erase_hardware',
+                'priority': 30,
+                'reboot_requested': False,
+            },
+        ]
+        self.node = {
+            'uuid': '8a2ff766-a28e-4bf2-aada-2c969ccf3398',
+            'driver_info': {'decommission_target_state': 'update_bios'},
+            'properties': {
+                "memory_mb": 524288,
+                "cpu_arch": "amd64",
+                "local_gb": 32,
+                "cpus": 12
+            }
+        }
+        self.ports = [
+            {
+                'node_id': '8a2ff766-a28e-4bf2-aada-2c969ccf3398',
+                'address': 'aa:bb:cc:dd:ee:ff'
+            },
+            {
+                'node_id': '8a2ff766-a28e-4bf2-aada-2c969ccf3398',
+                'address': 'aa:bb:cc:dd:ee:fe'
+            }
+        ]
+        self.hardware_manager = hardware.GenericHardwareManager()
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '.update_bios')
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '._get_next_target_state')
+    def test_decommission(self, next_target_mock, bios_mock):
+        next_target_mock.return_value = self.next_target
+        decom_return = self.hardware_manager.decommission(self.node,
+                                                          self.ports)
+        bios_mock.assert_called_with(self.node, self.ports)
+        self.assertEqual(self.next_target, decom_return)
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '.update_bios')
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '._get_next_target_state')
+    def test_decommission_first_run(self, next_target_mock, bios_mock):
+        next_target_mock.return_value = self.next_target
+        # Represent first run
+        self.node['driver_info']['decommission_target_state'] = None
+        decom_return = self.hardware_manager.decommission(self.node,
+                                                          self.ports)
+        bios_mock.assert_called_with(self.node, self.ports)
+        self.assertEqual(self.next_target, decom_return)
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '.verify_properties')
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '._get_next_target_state')
+    def test_decommission_specified_target(self, next_target_mock,
+                                           properties_mock):
+        next_target_mock.return_value = self.next_target
+        # Represent first run
+        self.node['driver_info']['decommission_target_state'] = None
+        decom_return = self.hardware_manager.decommission(
+            self.node,
+            self.ports,
+            decommission_target_state='verify_properties')
+        properties_mock.assert_called_with(self.node, self.ports)
+        self.assertEqual(self.next_target, decom_return)
+
+    def test_decommission_invalid_driver_info(self):
+        self.node['driver_info'] = {}
+        self.assertRaises(errors.DecommissionError,
+                          self.hardware_manager.decommission,
+                          self.node,
+                          self.ports)
+
+    @mock.patch('ironic_python_agent.hardware._get_sorted_steps')
+    def test_decommission_invalid_state(self, sorted_mock):
+        sorted_mock.return_value = {}
+        self.assertRaises(errors.DecommissionError,
+                          self.hardware_manager.decommission,
+                          self.node,
+                          self.ports)
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '.get_decommission_steps')
+    def test_decommission_invalid_function(self, steps_mock):
+        self.decommission_steps[0]['function'] = 'not_update_bios'
+        steps_mock.return_value = self.decommission_steps
+        self.assertRaises(errors.DecommissionError,
+                          self.hardware_manager.decommission,
+                          self.node,
+                          self.ports)
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '.update_bios')
+    def test_decommission_function_error(self, bios_mock):
+        bios_mock.side_effect = Exception
+        self.assertRaises(errors.DecommissionError,
+                          self.hardware_manager.decommission,
+                          self.node,
+                          self.ports)
+
+    def test__get_next_target_state(self):
+        next_step = self.hardware_manager._get_next_target_state(
+            self.decommission_steps, self.decommission_steps[0], None)
+        expected_next = {
+            'decommission_next_state': 'update_firmware',
+            'reboot_requested': False,
+            'step_return_value': None
+        }
+        self.assertEqual(expected_next, next_step)
+
+    def test__get_next_target_state_done(self):
+        next_step = self.hardware_manager._get_next_target_state(
+            self.decommission_steps, self.decommission_steps[2], None)
+        expected_next = {
+            'decommission_next_state': 'DONE',
+            'reboot_requested': False,
+            'step_return_value': None
+        }
+        self.assertEqual(expected_next, next_step)
+
+    def test__get_sorted_steps(self):
+        sorted_steps = hardware._get_sorted_steps(self.decommission_steps)
+        self.assertEqual(self.decommission_steps, sorted_steps)
+
+        unsorted_steps = [
+            {
+                'state': 'update_bios',
+                'function': 'update_bios',
+                'priority': 30,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'update_firmware',
+                'function': 'update_firmware',
+                'priority': 20,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'erase_hardware',
+                'function': 'erase_hardware',
+                'priority': 10,
+                'reboot_requested': False,
+            },
+            # Test that steps with no priority are ignored
+            {
+                'state': 'verify_properties',
+                'function': 'verify_properties',
+                'priority': None,
+                'reboot_requested': False,
+            }
+        ]
+        expected_steps = [
+            {
+                'state': 'erase_hardware',
+                'function': 'erase_hardware',
+                'priority': 10,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'update_firmware',
+                'function': 'update_firmware',
+                'priority': 20,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'update_bios',
+                'function': 'update_bios',
+                'priority': 30,
+                'reboot_requested': False,
+            },
+        ]
+        sorted_steps = hardware._get_sorted_steps(unsorted_steps)
+        self.assertEqual(expected_steps, sorted_steps)
+
+
+class TestVerify(test_base.BaseTestCase):
+    def setUp(self):
+        super(TestVerify, self).setUp()
+        # Truncated node object
+        self.node = {
+            'uuid': '8a2ff766-a28e-4bf2-aada-2c969ccf3398',
+            'driver_info': {},
+            'properties': {
+                "memory_mb": 524288,
+                "cpu_arch": "amd64",
+                "local_gb": 32,
+                "cpus": 12
+            }
+        }
+
+        self.hardware_manager = hardware.GenericHardwareManager()
+        # 32GB SSD
+        self.disk = hardware.BlockDevice(
+            '/dev/sda', 'super_duper_solid_state', 32 * 1024 * 1024 * 1024, 0)
+        # 512 GB of RAM
+        self.memory = hardware.Memory(549755813888)
+        # 12 fast cores
+        self.cpu = hardware.CPU('Intel Xeon E5-2630 v2', '2600.058', 12)
+        self.interface = hardware.NetworkInterface('eth0', 'aa:bb:cc:dd:ee:ff')
+        self.list_hardware = {
+            'interfaces': [self.interface],
+            'cpu': self.cpu,
+            'disks': [self.disk],
+            'memory': self.memory
+        }
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager.'
+                'get_os_install_device')
+    @mock.patch('ironic_python_agent.hardware.HardwareManager.'
+                'list_hardware_info')
+    def test_verify_properties(self, list_mock, install_mock):
+        list_mock.return_value = self.list_hardware
+        install_mock.return_value = '/dev/sda'
+
+        result = self.hardware_manager.verify_properties(self.node)
+        self.assertIsNone(result)
+
+    def test__verify_cpu_count_fail(self):
+        self.node['properties']['cpus'] = 20
+        self.assertRaises(
+            errors.VerificationFailed,
+            self.hardware_manager._verify_cpu_count,
+            self.node['properties'],
+            self.list_hardware)
+
+    def test__verify_memory_size_fail(self):
+        self.node['properties']['memory_mb'] = 32768
+        self.assertRaises(
+            errors.VerificationFailed,
+            self.hardware_manager._verify_memory_size,
+            self.node['properties'],
+            self.list_hardware)
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager.'
+                'get_os_install_device')
+    def test__verify_disks_size_fail(self, install_mock):
+        install_mock.return_value = '/dev/sda'
+        self.node['properties']['local_gb'] = 10
+        self.assertRaises(
+            errors.VerificationFailed,
+            self.hardware_manager._verify_disks_size,
+            self.node['properties'],
+            self.list_hardware)
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager.'
+                'get_os_install_device')
+    def test__verify_disks_size_no_name(self, install_mock):
+        install_mock.return_value = '/dev/not_sda'
+        self.assertRaises(
+            errors.VerificationFailed,
+            self.hardware_manager._verify_disks_size,
+            self.node['properties'],
+            self.list_hardware)
