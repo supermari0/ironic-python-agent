@@ -410,3 +410,152 @@ class TestGenericHardwareManager(test_base.BaseTestCase):
         self.assertRaises(errors.BlockDeviceEraseError,
                           self.hardware.erase_block_device,
                           block_device)
+
+
+class TestDecommission(test_base.BaseTestCase):
+    def setUp(self):
+        super(TestDecommission, self).setUp()
+        self.next_target = {
+            'decommissioning_next_state': 'fake_next',
+            'reboot_requested': True
+        }
+        self.decommission_steps = [
+            {
+                'state': 'update_bios',
+                'function': 'update_bios',
+                'priority': 10,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'update_firmware',
+                'function': 'update_firmware',
+                'priority': 20,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'erase_hardware',
+                'function': 'erase_hardware',
+                'priority': 30,
+                'reboot_requested': False,
+            },
+        ]
+        self.driver_info = {
+            'decommission_target_state': 'update_bios'
+        }
+        self.hardware_manager = hardware.GenericHardwareManager()
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '.update_bios')
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '._get_next_target_state')
+    def test_decommission(self, next_target_mock, bios_mock):
+        next_target_mock.return_value = self.next_target
+        decom_return = self.hardware_manager.decommission(self.driver_info)
+        bios_mock.assert_called_with(self.driver_info)
+        self.assertEqual(self.next_target, decom_return)
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '.update_bios')
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '._get_next_target_state')
+    def test_decommission_first_run(self, next_target_mock, bios_mock):
+        next_target_mock.return_value = self.next_target
+        # Represent first run
+        self.driver_info['decommission_target_state'] = None
+        decom_return = self.hardware_manager.decommission(self.driver_info)
+        bios_mock.assert_called_with(self.driver_info)
+        self.assertEqual(self.next_target, decom_return)
+
+    def test_decommission_invalid_driver_info(self):
+        self.assertRaises(errors.DecommissionError,
+                          self.hardware_manager.decommission,
+                          {})
+
+    @mock.patch('ironic_python_agent.hardware._get_sorted_steps')
+    def test_decommission_invalid_state(self, sorted_mock):
+        sorted_mock.return_value = {}
+        self.assertRaises(errors.DecommissionError,
+                          self.hardware_manager.decommission,
+                          self.driver_info)
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '.get_decommission_steps')
+    def test_decommission_invalid_function(self, steps_mock):
+        self.decommission_steps[0]['function'] = 'not_update_bios'
+        steps_mock.return_value = self.decommission_steps
+        self.assertRaises(errors.DecommissionError,
+                          self.hardware_manager.decommission,
+                          self.driver_info)
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager'
+                '.update_bios')
+    def test_decommission_function_error(self, bios_mock):
+        bios_mock.side_effect = Exception
+        self.assertRaises(errors.DecommissionError,
+                          self.hardware_manager.decommission,
+                          self.driver_info)
+
+    def test__get_next_target_state(self):
+        next_step = self.hardware_manager._get_next_target_state(
+            self.decommission_steps, self.decommission_steps[0])
+        expected_next = {
+            'decommissioning_next_state': 'update_firmware',
+            'reboot_requested': False
+        }
+        self.assertEqual(expected_next, next_step)
+
+    def test__get_next_target_state_done(self):
+        next_step = self.hardware_manager._get_next_target_state(
+            self.decommission_steps, self.decommission_steps[2])
+        expected_next = {
+            'decommissioning_next_state': None,
+            'reboot_requested': False
+        }
+        self.assertEqual(expected_next, next_step)
+
+    def test__get_sorted_steps(self):
+        sorted_steps = hardware._get_sorted_steps(self.decommission_steps)
+        self.assertEqual(self.decommission_steps, sorted_steps)
+
+        unsorted_steps = [
+            {
+                'state': 'update_bios',
+                'function': 'update_bios',
+                'priority': 30,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'update_firmware',
+                'function': 'update_firmware',
+                'priority': 20,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'erase_hardware',
+                'function': 'erase_hardware',
+                'priority': 10,
+                'reboot_requested': False,
+            },
+        ]
+        expected_steps = [
+            {
+                'state': 'erase_hardware',
+                'function': 'erase_hardware',
+                'priority': 10,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'update_firmware',
+                'function': 'update_firmware',
+                'priority': 20,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'update_bios',
+                'function': 'update_bios',
+                'priority': 30,
+                'reboot_requested': False,
+            },
+        ]
+        sorted_steps = hardware._get_sorted_steps(unsorted_steps)
+        self.assertEqual(expected_steps, sorted_steps)
