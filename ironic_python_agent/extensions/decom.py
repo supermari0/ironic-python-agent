@@ -19,4 +19,8 @@ from ironic_python_agent import hardware
 class DecomExtension(base.BaseAgentExtension):
     @base.async_command('erase_hardware')
     def erase_hardware(self):
-        hardware.get_manager().erase_devices()
+        return hardware.get_manager().erase_devices()
+
+    @base.async_command()
+    def decommission(self, driver_info):
+        return hardware.get_manager().decommission(driver_info)
