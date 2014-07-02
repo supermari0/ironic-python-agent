@@ -247,3 +247,21 @@ class UnknownNodeError(Exception):
         if message is not None:
             self.message = message
         super(UnknownNodeError, self).__init__(self.message)
+
+
+class DecommissionError(RESTError):
+    message = 'Agent failed to decommission.'
+
+    def __init__(self, message):
+        self.message = message
+
+
+class VerificationError(RESTError):
+    def __init__(self, message):
+        self.message = message
+
+
+class VerificationFailed(VerificationError):
+    def __init__(self, message):
+        self.status_code = 409
+        self.message = ('Verification failed because: %s' % message)

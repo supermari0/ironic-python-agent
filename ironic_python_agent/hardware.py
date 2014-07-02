@@ -14,6 +14,7 @@
 
 import abc
 import functools
+import operator
 import os
 import shlex
 
@@ -135,6 +136,56 @@ class HardwareManager(object):
         """
         pass
 
+    @abc.abstractmethod
+    def update_firmware(self, node, ports):
+        pass
+
+    @abc.abstractmethod
+    def update_bios(self, node, ports):
+        pass
+
+    def get_decommission_steps(self):
+        """Get a list of decommission steps with priority
+
+        Returns a list of dicts of the following form:
+        {'function': the HardwareManager function to call.
+         'priority': the order to call, starting at 1. If two steps share
+                    the same priority, their order is undefined.
+         'reboot_requested': Whether the agent should request Ironic reboots
+                             it after the operation completes.
+         'state': The state the machine will be in when the operation
+                  completes. This will match the decommission_target_state
+                  saved in the Ironic node.
+        :return: a default list of decommission steps, as a list of
+        dictionaries
+        """
+        return [
+            {
+                'state': 'update_bios',
+                'function': 'update_bios',
+                'priority': 10,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'update_firmware',
+                'function': 'update_firmware',
+                'priority': 20,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'erase_devices',
+                'function': 'erase_devices',
+                'priority': 30,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'verify_properties',
+                'function': 'verify_properties',
+                'priority': 40,
+                'reboot_requested': False,
+            }
+        ]
+
     def erase_devices(self):
         """Erase any device that holds user data.
 
@@ -146,6 +197,84 @@ class HardwareManager(object):
         block_devices = self.list_block_devices()
         for block_device in block_devices:
             self.erase_block_device(block_device)
+
+    def decommission(self, node, ports, **kwargs):
+        """Run through a multi stage decommission process
+
+        :param node: A dict representation of an Ironic node to decommission.
+                    The driver info from the Ironic Node to be decommissioned.
+                    Needs to contain a key 'decommission_target_state' with
+                    the next decommission state to move to.
+        :param ports: A list of dict representations of the Port objects
+                      attached to the node.
+        :param kwargs: May contain a key 'decommission_target_state' that will
+                       run the specified state instead of the next state in
+                       get_decommission_steps.
+        :return: A dict containing 'decommission_next_state',
+                 'reboot_requested', and 'step_return_value'
+        """
+        driver_info = node.get('driver_info', {})
+        target_state = kwargs.get('decommission_target_state')
+
+        if not target_state:
+            if 'decommission_target_state' not in driver_info:
+                raise errors.DecommissionError('Node object requires key '
+                                               '"decommission_target_state".')
+            target_state = driver_info.get('decommission_target_state')
+
+        decommission_steps = self.get_decommission_steps()
+        if not target_state:
+            step = _get_sorted_steps(decommission_steps)[0]
+        else:
+            # Run the command matching target state
+            step = None
+            for decommission_step in _get_sorted_steps(decommission_steps):
+                if decommission_step.get('state') == target_state:
+                    step = decommission_step
+                    break
+        if step is None:
+            raise errors.DecommissionError(
+                'Hardware manager does not have %s as an available state.'
+                % target_state)
+
+        # Get the function from the hardware manager
+        try:
+            func = getattr(self, step['function'])
+        except AttributeError:
+            raise errors.DecommissionError(
+                'Hardware manager does not have %s as a function.' %
+                step['function'])
+
+        # Execute function
+        try:
+            #TODO(JoshNang) return the result to commandresult
+            return_value = func(node, ports)
+        except Exception:
+            raise errors.DecommissionError('Error performing decommission '
+                                           'function %s' % step['function'])
+        return self._get_next_target_state(decommission_steps, step,
+                                           return_value)
+
+    def _get_next_target_state(self, decommission_steps, step, return_value):
+        """Given the current state, determine the next decommission state."""
+        next_steps = _get_sorted_steps(decommission_steps)
+        for index, next_step in enumerate(next_steps):
+            if next_step['state'] == step['state']:
+                if index == len(next_steps) - 1:
+                    next_state = 'DONE'
+                else:
+                    next_state = next_steps[index + 1]['state']
+                return {
+                    # This will get saved in Node.driver_info[
+                    # 'target_decommission_state'] and sent back to the node
+                    # on lookup
+                    'decommission_next_state': next_state,
+                    # If true, the node will be rebooted by Ironic
+                    # (possibly out of band)
+                    'reboot_requested': step.get('reboot_requested'),
+                    # The output from the last run command
+                    'step_return_value': return_value
+                }
 
     def list_hardware_info(self):
         hardware_info = {}
@@ -327,6 +456,79 @@ class GenericHardwareManager(HardwareManager):
                 'erasing block device {0}').format(block_device.name))
 
         return True
+
+    def update_bios(self, node, ports):
+        pass
+
+    def update_firmware(self, node, ports):
+        pass
+
+    def verify_properties(self, node, ports=None):
+        """Verify that the node's properties match the hardware
+        :param node: a dict representation of the node
+        :param ports: a list of dict representation of Ports connected to
+                      the node
+        """
+        properties = node.get('properties', {})
+        hardware = self.list_hardware_info()
+        # Ensure possibly overridden list_hardware_info return correct results
+        for key in ('cpu', 'memory', 'disks'):
+            if not hardware.get(key):
+                raise errors.VerificationError(
+                    'list_hardware_info needs to return cpu, memory and '
+                    'disks keys')
+        self._verify_cpu_count(properties, hardware)
+        self._verify_memory_size(properties, hardware)
+        self._verify_disks_size(properties, hardware)
+
+    def _verify_cpu_count(self, properties, hardware):
+        """Verifies CPU count is the same as listed in node.properties."""
+        given = hardware['cpu'].count
+        actual = properties.get('cpus', 0)
+
+        if given != actual:
+            raise errors.VerificationFailed(
+                'Node CPU count %(given)s does not match detected count '
+                '%(actual)s' % {'given': given, 'actual': actual})
+
+    def _verify_memory_size(self, properties, hardware):
+        """Verifies memory size is the same as listed in node.properties."""
+        # Convert bytes to MB
+        given = hardware['memory'].total / (1024 * 1024)
+        actual = properties.get('memory_mb', 0)
+
+        if given != actual:
+            raise errors.VerificationFailed(
+                'Node memory size %(given)s does not match detected '
+                'count %(actual)s' % {'given': given, 'actual': actual})
+
+    def _verify_disks_size(self, properties, hardware):
+        """Verifies disk size is the same as listed in node.properties."""
+        actual = properties.get('local_gb', 0)
+        # TODO(JoshNang) fix listing hardware twice
+        name = self.get_os_install_device()
+        disk = None
+        for device in hardware['disks']:
+            if device.name == name:
+                disk = device
+                break
+
+        # Make sure not to skip if this is a diskless system
+        if not disk and actual > 0:
+            raise errors.VerificationFailed(
+                'Could not find a disk to match to local_gb.')
+        # Convert bytes to GB
+
+        given = disk.size / (1024 * 1024 * 1024)
+        if given != actual:
+            raise errors.VerificationFailed(
+                'Node disk size %(given)s does not match detected '
+                'size %(actual)s' % {'given': given, 'actual': actual})
+
+
+def _get_sorted_steps(steps):
+    """Sort decommission steps by priority."""
+    return sorted(steps, key=operator.itemgetter('priority'))
 
 
 def _compare_extensions(ext1, ext2):
