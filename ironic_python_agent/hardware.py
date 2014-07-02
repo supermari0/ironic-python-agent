@@ -14,6 +14,7 @@
 
 import abc
 import functools
+import operator
 import os
 
 import netifaces
@@ -132,6 +133,50 @@ class HardwareManager(object):
         """
         pass
 
+    @abc.abstractmethod
+    def update_firmware(self, driver_info):
+        pass
+
+    @abc.abstractmethod
+    def update_bios(self, driver_info):
+        pass
+
+    def get_decommission_steps(self):
+        """Get a list of decommission steps with priority
+
+        Returns a list of dicts of the following form:
+        {'function': the HardwareManager function to call.
+         'priority': the order to call, starting at 1. If two steps share
+                    the same priority, their order is undefined.
+         'reboot_requested': Whether the agent should request Ironic reboots
+                             it after the operation completes.
+         'state': The state the machine will be in when the operation
+                  completes. This will match the decommission_target_state
+                  saved in the Ironic node.
+        :return: a default list of decommission steps, as a list of
+        dictionaries
+        """
+        return [
+            {
+                'state': 'update_bios',
+                'function': 'update_bios',
+                'priority': 10,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'update_firmware',
+                'function': 'update_firmware',
+                'priority': 20,
+                'reboot_requested': False,
+            },
+            {
+                'state': 'erase_devices',
+                'function': 'erase_devices',
+                'priority': 30,
+                'reboot_requested': False,
+            },
+        ]
+
     def erase_devices(self):
         """Erase any device that holds user data.
 
@@ -143,6 +188,70 @@ class HardwareManager(object):
         block_devices = self.list_block_devices()
         for block_device in block_devices:
             self.erase_block_device(block_device)
+
+    def decommission(self, driver_info):
+        """Run through a multi stage decommission process
+
+        :param driver_info: The driver info from the Ironic Node to be
+                            decommissioned. Needs to contain a key
+                            'decommission_target_state' with the next
+                            decommission state to move to.
+        """
+        if 'decommission_target_state' not in driver_info:
+            raise errors.DecommissionError('Node object requires key '
+                                           '"decommission_target_state".')
+        target_state = driver_info.get('decommission_target_state')
+
+        decommission_steps = self.get_decommission_steps()
+        if not target_state:
+            step = _get_sorted_steps(decommission_steps)[0]
+        else:
+            # Run the command matching target state
+            step = None
+            for decommission_step in _get_sorted_steps(decommission_steps):
+                if decommission_step.get('state') == target_state:
+                    step = decommission_step
+                    break
+        if step is None:
+            raise errors.DecommissionError(
+                'Hardware manager does not have %s as an available state.'
+                % target_state)
+
+        # Get the function from the hardware manager
+        try:
+            func = getattr(self, step['function'])
+        except AttributeError:
+            raise errors.DecommissionError(
+                'Hardware manager does not have %s as a function.' %
+                step['function'])
+
+        # Execute function
+        try:
+            #TODO(JoshNang) return the result to commandresult
+            func(driver_info)
+        except Exception:
+            raise errors.DecommissionError('Error performing decommission '
+                                           'function %s' % step['function'])
+        return self._get_next_target_state(decommission_steps, step)
+
+    def _get_next_target_state(self, decommission_steps, step):
+        """Given the current state, determine the next decommission state."""
+        next_steps = _get_sorted_steps(decommission_steps)
+        for index, next_step in enumerate(next_steps):
+            if next_step['state'] == step['state']:
+                if index == len(next_steps) - 1:
+                    next_state = 'DONE'
+                else:
+                    next_state = next_steps[index + 1]['state']
+                return {
+                    # This will get saved in Node.driver_info[
+                    # 'target_decommission_state'] and sent back to the node
+                    # on lookup
+                    'decommission_next_state': next_state,
+                    # If true, the node will be rebooted by Ironic
+                    # (possibly out of band)
+                    'reboot_requested': step.get('reboot_requested')
+                }
 
     def list_hardware_info(self):
         hardware_info = {}
@@ -291,6 +400,17 @@ class GenericHardwareManager(HardwareManager):
                 'erasing block device {0}').format(block_device.name))
 
         return True
+
+    def update_bios(self, driver_info):
+        pass
+
+    def update_firmware(self, driver_info):
+        pass
+
+
+def _get_sorted_steps(steps):
+    """Sort decommission steps by priority."""
+    return sorted(steps, key=operator.itemgetter('priority'))
 
 
 def _compare_extensions(ext1, ext2):
