@@ -216,3 +216,7 @@ class BlockDeviceEraseError(RESTError):
 
 class ExtensionError(Exception):
     pass
+
+
+class DecommissionError(RESTError):
+    message = 'Agent failed to decommission.'
