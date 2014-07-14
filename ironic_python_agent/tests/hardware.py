@@ -440,7 +440,8 @@ class TestDecommission(test_base.BaseTestCase):
             },
         ]
         self.driver_info = {
-            'decommission_target_state': 'update_bios'
+            'decommission_target_state': 'update_bios',
+            'hardware_manager_version': '1'
         }
         self.hardware_manager = hardware.GenericHardwareManager()
 
@@ -465,6 +466,13 @@ class TestDecommission(test_base.BaseTestCase):
         decom_return = self.hardware_manager.decommission(self.driver_info)
         bios_mock.assert_called_with(self.driver_info)
         self.assertEqual(self.next_target, decom_return)
+
+    def test_decommission_version_mismatch(self):
+        self.hardware_manager.HARDWARE_MANAGER_VERSION = '2'
+        self.driver_info['decommission_target_state'] = None
+        self.assertRaises(errors.WrongDecommissionVersion,
+                          self.hardware_manager.decommission,
+                          self.driver_info)
 
     def test_decommission_invalid_driver_info(self):
         self.assertRaises(errors.DecommissionError,
@@ -500,7 +508,8 @@ class TestDecommission(test_base.BaseTestCase):
             self.decommission_steps, self.decommission_steps[0])
         expected_next = {
             'decommission_next_state': 'update_firmware',
-            'reboot_requested': False
+            'reboot_requested': False,
+            'hardware_manager_version': '1'
         }
         self.assertEqual(expected_next, next_step)
 
@@ -509,7 +518,8 @@ class TestDecommission(test_base.BaseTestCase):
             self.decommission_steps, self.decommission_steps[2])
         expected_next = {
             'decommission_next_state': 'DONE',
-            'reboot_requested': False
+            'reboot_requested': False,
+            'hardware_manager_version': '1'
         }
         self.assertEqual(expected_next, next_step)
 
