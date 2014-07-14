@@ -196,7 +196,7 @@ class HardwareManager(object):
             }
         ]
 
-    def erase_devices(self):
+    def erase_devices(self, driver_info):
         """Erase any device that holds user data.
 
         By default this will attempt to erase block devices. This method can be
@@ -221,7 +221,8 @@ class HardwareManager(object):
                        run the specified state instead of the next state in
                        get_decommission_steps.
         :return: A dict containing 'decommission_next_state',
-                 'reboot_requested', and 'step_return_value'
+                 'reboot_requested', 'hardware_manager_version' and
+                 'step_return_value'
         """
         driver_info = node.get('driver_info', {})
         target_state = kwargs.get('decommission_target_state')
@@ -237,6 +238,14 @@ class HardwareManager(object):
         else:
             # If specifying a specific state, don't filter or sort
             steps = decommission_steps
+
+        node_version = driver_info.get('hardware_manager_version')
+        # If versions are not the same, request restart of decommission process
+        # If node_version is not set, it's the first run, can't be a mismatch
+        if node_version and node_version != self.HARDWARE_MANAGER_VERSION:
+            raise errors.WrongDecommissionVersion(
+                agent_version=self.HARDWARE_MANAGER_VERSION,
+                node_version=node_version)
 
         if not target_state:
             # If no previous step, use the first sorted step
@@ -291,7 +300,9 @@ class HardwareManager(object):
                     # (possibly out of band)
                     'reboot_requested': step.get('reboot_requested'),
                     # The output from the last run command
-                    'step_return_value': return_value
+                    'step_return_value': return_value,
+                    # The current hardware manager version
+                    'hardware_manager_version': self.HARDWARE_MANAGER_VERSION
                 }
 
     def list_hardware_info(self):
