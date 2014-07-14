@@ -22,6 +22,13 @@ class DecomExtension(base.BaseAgentExtension):
     def erase_hardware(self):
         return hardware.get_manager().erase_devices()
 
+    @base.async_command('get_hardware_manager_version')
+    def get_hardware_manager_version(self):
+        manager = hardware.get_manager()
+        return {
+            'hardware_manager_version': manager.HARDWARE_MANAGER_VERSION
+        }
+
     @base.async_command('get_decommission_steps')
     def get_decommission_steps(self):
         # Results should be a dict, not a list
