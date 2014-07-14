@@ -28,6 +28,7 @@ class AgentCommandStatus(object):
     RUNNING = u'RUNNING'
     SUCCEEDED = u'SUCCEEDED'
     FAILED = u'FAILED'
+    DECOM_VERSION_MISMATCH = u'DECOM_VERSION_MISMATCH'
 
 
 class BaseCommandResult(encoding.Serializable):
@@ -97,7 +98,14 @@ class AsyncCommandResult(BaseCommandResult):
             with self.command_state_lock:
                 self.command_result = result
                 self.command_status = AgentCommandStatus.SUCCEEDED
-
+        except errors.WrongDecommissionVersion as e:
+            with self.command_state_lock:
+                self.command_error = e
+                self.command_status = AgentCommandStatus.DECOM_VERSION_MISMATCH
+                self.command_result = {
+                    'agent_hardware_manager_version': e.agent_version,
+                    'node_hardware_manager_version': e.node_version
+                }
         except Exception as e:
             if not isinstance(e, errors.RESTError):
                 e = errors.CommandExecutionError(str(e))
