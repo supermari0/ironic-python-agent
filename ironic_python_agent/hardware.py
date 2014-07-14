@@ -85,6 +85,10 @@ class Memory(encoding.Serializable):
 
 @six.add_metaclass(abc.ABCMeta)
 class HardwareManager(object):
+    # Version so we can restart the decommission process if it changes
+    # between reboots
+    HARDWARE_MANAGER_VERSION = '1'
+
     @abc.abstractmethod
     def evaluate_hardware_support(self):
         pass
@@ -177,7 +181,7 @@ class HardwareManager(object):
             },
         ]
 
-    def erase_devices(self):
+    def erase_devices(self, driver_info):
         """Erase any device that holds user data.
 
         By default this will attempt to erase block devices. This method can be
@@ -197,8 +201,16 @@ class HardwareManager(object):
                             'decommission_target_state' with the next
                             decommission state to move to.
         """
+        node_version = driver_info.get('hardware_manager_version')
+
+        # If versions are not the same, request restart of decommission process
+        if node_version != self.HARDWARE_MANAGER_VERSION:
+            raise errors.WrongDecommissionVersion(
+                agent_version=self.HARDWARE_MANAGER_VERSION,
+                node_version=node_version)
+
         if 'decommission_target_state' not in driver_info:
-            raise errors.DecommissionError('Node object requires key '
+            raise errors.DecommissionError('Node driver_info requires key '
                                            '"decommission_target_state".')
         target_state = driver_info.get('decommission_target_state')
 
@@ -229,9 +241,10 @@ class HardwareManager(object):
         try:
             #TODO(JoshNang) return the result to commandresult
             func(driver_info)
-        except Exception:
-            raise errors.DecommissionError('Error performing decommission '
-                                           'function %s' % step['function'])
+        except Exception as e:
+            raise errors.DecommissionError(
+                'Error performing decommission function %(func)s. Error: '
+                '%(err)s' % {'func': step['function'], 'err': str(e)})
         return self._get_next_target_state(decommission_steps, step)
 
     def _get_next_target_state(self, decommission_steps, step):
@@ -250,7 +263,8 @@ class HardwareManager(object):
                     'decommission_next_state': next_state,
                     # If true, the node will be rebooted by Ironic
                     # (possibly out of band)
-                    'reboot_requested': step.get('reboot_requested')
+                    'reboot_requested': step.get('reboot_requested'),
+                    'hardware_manager_version': self.HARDWARE_MANAGER_VERSION
                 }
 
     def list_hardware_info(self):
@@ -263,6 +277,8 @@ class HardwareManager(object):
 
 
 class GenericHardwareManager(HardwareManager):
+    HARDWARE_MANAGER_VERSION = '1'
+
     def __init__(self):
         self.sys_path = '/sys'
 
@@ -389,9 +405,9 @@ class GenericHardwareManager(HardwareManager):
                 'and cannot be erased').format(block_device.name))
 
         utils.execute('hdparm', '--user-master', 'u', '--security-set-pass',
-                      'NULL', block_device.name)
+                      'NULL', block_device.name, check_exit_code=[0])
         utils.execute('hdparm', '--user-master', 'u', '--security-erase',
-                      'NULL', block_device.name)
+                      'NULL', block_device.name, check_exit_code=[0])
 
         # Verify that security is now 'not enabled'
         security_lines = self._get_ata_security_lines(block_device)
