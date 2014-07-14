@@ -348,9 +348,9 @@ class TestGenericHardwareManager(test_base.BaseTestCase):
         mocked_execute.assert_has_calls([
             mock.call('hdparm', '-I', '/dev/sda'),
             mock.call('hdparm', '--user-master', 'u', '--security-set-pass',
-                      'NULL', '/dev/sda'),
+                      'NULL', '/dev/sda', check_exit_code=[0]),
             mock.call('hdparm', '--user-master', 'u', '--security-erase',
-                      'NULL', '/dev/sda'),
+                      'NULL', '/dev/sda', check_exit_code=[0]),
             mock.call('hdparm', '-I', '/dev/sda'),
         ])
 
@@ -481,7 +481,9 @@ class TestDecommission(test_base.BaseTestCase):
         ]
         self.node = {
             'uuid': '8a2ff766-a28e-4bf2-aada-2c969ccf3398',
-            'driver_info': {'decommission_target_state': 'update_bios'},
+            'driver_info': {
+                'decommission_target_state': 'update_bios',
+                'hardware_manager_version': '1'},
             'properties': {
                 "memory_mb": 524288,
                 "cpu_arch": "amd64",
@@ -532,6 +534,14 @@ class TestDecommission(test_base.BaseTestCase):
                           self.node,
                           self.ports)
 
+    def test_decommission_version_mismatch(self):
+        self.hardware_manager.HARDWARE_MANAGER_VERSION = '2'
+        self.node['driver_info']['decommission_target_state'] = None
+        self.assertRaises(errors.WrongDecommissionVersion,
+                          self.hardware_manager.decommission,
+                          self.node,
+                          self.ports)
+
     @mock.patch('ironic_python_agent.hardware._get_sorted_steps')
     def test_decommission_invalid_state(self, sorted_mock):
         sorted_mock.return_value = {}
@@ -565,7 +575,8 @@ class TestDecommission(test_base.BaseTestCase):
         expected_next = {
             'decommission_next_state': 'update_firmware',
             'reboot_requested': False,
-            'step_return_value': None
+            'step_return_value': None,
+            'hardware_manager_version': '1'
         }
         self.assertEqual(expected_next, next_step)
 
@@ -575,7 +586,8 @@ class TestDecommission(test_base.BaseTestCase):
         expected_next = {
             'decommission_next_state': 'DONE',
             'reboot_requested': False,
-            'step_return_value': None
+            'step_return_value': None,
+            'hardware_manager_version': '1'
         }
         self.assertEqual(expected_next, next_step)
 
