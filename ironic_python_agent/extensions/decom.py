@@ -21,6 +21,6 @@ class DecomExtension(base.BaseAgentExtension):
     def erase_hardware(self):
         return hardware.get_manager().erase_devices()
 
-    @base.async_command()
+    @base.async_command('decommission')
     def decommission(self, driver_info):
         return hardware.get_manager().decommission(driver_info)

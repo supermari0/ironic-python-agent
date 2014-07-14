@@ -234,6 +234,19 @@ class VirtualMediaBootError(RESTError):
         self.details = details
 
 
+class WrongDecommissionVersion(RESTError):
+    """Error raised when Ironic and the Agent have different versions."""
+    message = 'Decommission version mismatch, reboot to new agent'
+
+    def __init__(self, agent_version, node_version):
+        self.status_code = 409
+        self.details = ('Agent decommission version: {0}, node decommission '
+                        'version: {1}')
+        self.details = self.details.format(agent_version, node_version)
+        self.agent_version = agent_version
+        self.node_version = node_version
+
+
 class ExtensionError(Exception):
     pass
 
@@ -251,3 +264,6 @@ class UnknownNodeError(Exception):
 
 class DecommissionError(RESTError):
     message = 'Agent failed to decommission.'
+
+    def __init__(self, message):
+        self.message = message
