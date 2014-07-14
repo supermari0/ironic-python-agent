@@ -88,6 +88,10 @@ class Memory(encoding.Serializable):
 
 @six.add_metaclass(abc.ABCMeta)
 class HardwareManager(object):
+    # Version so we can restart the decommission process if it changes
+    # between reboots
+    HARDWARE_MANAGER_VERSION = '1'
+
     @abc.abstractmethod
     def evaluate_hardware_support(self):
         pass
@@ -186,7 +190,7 @@ class HardwareManager(object):
             }
         ]
 
-    def erase_devices(self):
+    def erase_devices(self, driver_info):
         """Erase any device that holds user data.
 
         By default this will attempt to erase block devices. This method can be
@@ -211,7 +215,8 @@ class HardwareManager(object):
                        run the specified state instead of the next state in
                        get_decommission_steps.
         :return: A dict containing 'decommission_next_state',
-                 'reboot_requested', and 'step_return_value'
+                 'reboot_requested', 'hardware_manager_version' and
+                 'step_return_value'
         """
         driver_info = node.get('driver_info', {})
         target_state = kwargs.get('decommission_target_state')
@@ -221,6 +226,14 @@ class HardwareManager(object):
                 raise errors.DecommissionError('Node object requires key '
                                                '"decommission_target_state".')
             target_state = driver_info.get('decommission_target_state')
+
+        node_version = driver_info.get('hardware_manager_version')
+        # If versions are not the same, request restart of decommission process
+        # If node_version is not set, it's the first run, can't be a mismatch
+        if node_version and node_version != self.HARDWARE_MANAGER_VERSION:
+            raise errors.WrongDecommissionVersion(
+                agent_version=self.HARDWARE_MANAGER_VERSION,
+                node_version=node_version)
 
         decommission_steps = self.get_decommission_steps()
         if not target_state:
@@ -249,9 +262,10 @@ class HardwareManager(object):
         try:
             #TODO(JoshNang) return the result to commandresult
             return_value = func(node, ports)
-        except Exception:
-            raise errors.DecommissionError('Error performing decommission '
-                                           'function %s' % step['function'])
+        except Exception as e:
+            raise errors.DecommissionError(
+                'Error performing decommission function %(func)s. Error: '
+                '%(err)s' % {'func': step['function'], 'err': str(e)})
         return self._get_next_target_state(decommission_steps, step,
                                            return_value)
 
@@ -273,7 +287,9 @@ class HardwareManager(object):
                     # (possibly out of band)
                     'reboot_requested': step.get('reboot_requested'),
                     # The output from the last run command
-                    'step_return_value': return_value
+                    'step_return_value': return_value,
+                    # The current hardware manager version
+                    'hardware_manager_version': self.HARDWARE_MANAGER_VERSION
                 }
 
     def list_hardware_info(self):
@@ -286,6 +302,8 @@ class HardwareManager(object):
 
 
 class GenericHardwareManager(HardwareManager):
+    HARDWARE_MANAGER_VERSION = '1'
+
     def __init__(self):
         self.sys_path = '/sys'
 
@@ -445,9 +463,9 @@ class GenericHardwareManager(HardwareManager):
                 'and cannot be erased').format(block_device.name))
 
         utils.execute('hdparm', '--user-master', 'u', '--security-set-pass',
-                      'NULL', block_device.name)
+                      'NULL', block_device.name, check_exit_code=[0])
         utils.execute('hdparm', '--user-master', 'u', '--security-erase',
-                      'NULL', block_device.name)
+                      'NULL', block_device.name, check_exit_code=[0])
 
         # Verify that security is now 'not enabled'
         security_lines = self._get_ata_security_lines(block_device)
