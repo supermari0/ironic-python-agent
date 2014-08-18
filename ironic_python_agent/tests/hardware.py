@@ -199,6 +199,22 @@ class TestGenericHardwareManager(test_base.BaseTestCase):
         mocked_execute.assert_called_once_with(
             'lsblk', '-PbdioKNAME,MODEL,SIZE,ROTA,TYPE', check_exit_code=[0])
 
+    @mock.patch('ironic_python_agent.imaging.get_image_manager')
+    def test_get_image_manager(self, get_img_mgr_mock):
+        image_info = {'disk_format': 'fake_disk_format',
+                      'container_format': 'fake_container_format'}
+        res = self.hardware.get_image_manager(image_info)
+        get_img_mgr_mock.assert_called_once_with('fake_disk_format',
+                                                 'fake_container_format')
+        self.assertEqual(get_img_mgr_mock.return_value, res)
+
+    @mock.patch('ironic_python_agent.imaging.get_image_manager')
+    def test_get_image_manager_no_disk_format(self, get_img_mgr_mock):
+        image_info = {}
+        res = self.hardware.get_image_manager(image_info)
+        get_img_mgr_mock.assert_called_once_with(None, None)
+        self.assertEqual(get_img_mgr_mock.return_value, res)
+
     @mock.patch('ironic_python_agent.hardware.GenericHardwareManager.'
                 '_get_cpu_count')
     @mock.patch(OPEN_FUNCTION_NAME)

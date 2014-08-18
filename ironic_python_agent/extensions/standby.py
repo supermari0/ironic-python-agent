@@ -12,13 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import base64
-import gzip
-import hashlib
 import os
-import requests
 import six
-import StringIO
 import time
 
 from ironic_python_agent import errors
@@ -31,126 +26,9 @@ from ironic_python_agent import utils
 LOG = log.getLogger(__name__)
 
 
-def _configdrive_location():
-    return '/tmp/configdrive'
-
-
-def _image_location(image_info):
-    return '/tmp/{0}'.format(image_info['id'])
-
-
 def _path_to_script(script):
     cwd = os.path.dirname(os.path.realpath(__file__))
     return os.path.join(cwd, '..', script)
-
-
-def _write_image(image_info, device):
-    starttime = time.time()
-    image = _image_location(image_info)
-
-    script = _path_to_script('shell/write_image.sh')
-    command = ['/bin/bash', script, image, device]
-    LOG.info('Writing image with command: {0}'.format(' '.join(command)))
-    try:
-        stdout, stderr = utils.execute(*command, check_exit_code=[0])
-    except processutils.ProcessExecutionError as e:
-        raise errors.ImageWriteError(device, e.exit_code, e.stdout, e.stderr)
-    totaltime = time.time() - starttime
-    LOG.info('Image {0} written to device {1} in {2} seconds'.format(
-             image, device, totaltime))
-
-
-def _write_configdrive_to_file(configdrive, filename):
-    LOG.debug('Writing configdrive to {0}'.format(filename))
-    # configdrive data is base64'd, decode it first
-    data = StringIO.StringIO(base64.b64decode(configdrive))
-    gunzipped = gzip.GzipFile('configdrive', 'rb', 9, data)
-    with open(filename, 'wb') as f:
-        f.write(gunzipped.read())
-    gunzipped.close()
-
-
-def _write_configdrive_to_partition(configdrive, device):
-    filename = _configdrive_location()
-    _write_configdrive_to_file(configdrive, filename)
-
-    # check configdrive size before writing it
-    filesize = os.stat(filename).st_size
-    if filesize > (64 * 1024 * 1024):
-        raise errors.ConfigDriveTooLargeError(filename, filesize)
-
-    starttime = time.time()
-    script = _path_to_script('shell/copy_configdrive_to_disk.sh')
-    command = ['/bin/bash', script, filename, device]
-    LOG.info('copying configdrive to disk with command {0}'.format(
-             ' '.join(command)))
-
-    try:
-        stdout, stderr = utils.execute(*command, check_exit_code=[0])
-    except processutils.ProcessExecutionError as e:
-        raise errors.ConfigDriveWriteError(device,
-                                           e.exit_code,
-                                           e.stdout,
-                                           e.stderr)
-
-    totaltime = time.time() - starttime
-    LOG.info('configdrive copied from {0} to {1} in {2} seconds'.format(
-             configdrive,
-             device,
-             totaltime))
-
-
-def _request_url(image_info, url):
-    resp = requests.get(url, stream=True)
-    if resp.status_code != 200:
-        raise errors.ImageDownloadError(image_info['id'])
-    return resp
-
-
-def _download_image(image_info):
-    starttime = time.time()
-    resp = None
-    for url in image_info['urls']:
-        try:
-            LOG.info("Attempting to download image from {0}".format(url))
-            resp = _request_url(image_info, url)
-        except errors.ImageDownloadError:
-            failtime = time.time() - starttime
-            log_msg = "Image download failed. URL: {0}; time: {1} seconds"
-            LOG.warning(log_msg.format(url, failtime))
-            continue
-        else:
-            break
-    if resp is None:
-        raise errors.ImageDownloadError(image_info['id'])
-
-    image_location = _image_location(image_info)
-    with open(image_location, 'wb') as f:
-        try:
-            for chunk in resp.iter_content(1024 * 1024):
-                f.write(chunk)
-        except Exception:
-            raise errors.ImageDownloadError(image_info['id'])
-
-    totaltime = time.time() - starttime
-    LOG.info("Image downloaded from {0} in {1} seconds".format(image_location,
-                                                               totaltime))
-
-    if not _verify_image(image_info, image_location):
-        raise errors.ImageChecksumError(image_info['id'])
-
-
-def _verify_image(image_info, image_location):
-    checksum = image_info['checksum']
-    log_msg = 'Verifying image at {0} against MD5 checksum {1}'
-    LOG.debug(log_msg.format(image_location, checksum))
-    hash_ = hashlib.md5(open(image_location).read()).hexdigest()
-    if hash_ == checksum:
-        return True
-    log_msg = ('Image verification failed. Location: {0};'
-               'image hash: {1}; verification hash: {2}')
-    LOG.warning(log_msg.format(image_location, checksum, hash_))
-    return False
 
 
 def _validate_image_info(ext, image_info=None, **kwargs):
@@ -177,29 +55,52 @@ class StandbyExtension(base.BaseAgentExtension):
 
         self.cached_image_id = None
 
+    def _write_image(self, img_mgr, image_info, device, force=False):
+        if self.cached_image_id != image_info['id'] or force:
+            LOG.info('Writing image %(id)s to device %(device)s',
+                     {'id': image_info['id'],
+                      'device': device})
+            starttime = time.time()
+            img_mgr.write_os_image(image_info, device)
+            totaltime = time.time() - starttime
+            self.cached_image_id = image_info['id']
+            LOG.info('Image %(id)s written to device %(device)s in '
+                     '%(secs)s second(s)',
+                     {'id': image_info['id'],
+                      'device': device,
+                      'secs': totaltime})
+        else:
+            LOG.info('Image %(id)s already written to device %(device)s',
+                     {'id': image_info['id'],
+                      'device': device})
+
     @base.async_command('cache_image', _validate_image_info)
     def cache_image(self, image_info=None, force=False):
-        device = hardware.get_manager().get_os_install_device()
-
-        if self.cached_image_id != image_info['id'] or force:
-            _download_image(image_info)
-            _write_image(image_info, device)
-            self.cached_image_id = image_info['id']
+        hw_mgr = hardware.get_manager()
+        device = hw_mgr.get_os_install_device()
+        img_mgr = hw_mgr.get_image_manager(image_info)
+        self._write_image(img_mgr, image_info, device, force=force)
 
     @base.async_command('prepare_image', _validate_image_info)
-    def prepare_image(self,
-                      image_info=None,
-                      configdrive=None):
-        device = hardware.get_manager().get_os_install_device()
+    def prepare_image(self, image_info=None, configdrive=None):
+        hw_mgr = hardware.get_manager()
+        device = hw_mgr.get_os_install_device()
+        img_mgr = hw_mgr.get_image_manager(image_info)
+        self._write_image(img_mgr, image_info, device)
 
-        # don't write image again if already cached
-        if self.cached_image_id != image_info['id']:
-            _download_image(image_info)
-            _write_image(image_info, device)
-            self.cached_image_id = image_info['id']
-
-        if configdrive is not None:
-            _write_configdrive_to_partition(configdrive, device)
+        if configdrive is None:
+            LOG.info('No configdrive to write to device %(device)s',
+                     {'device': device})
+        else:
+            LOG.info('Writing configdrive to device %(device)s',
+                     {'device': device})
+            starttime = time.time()
+            img_mgr.write_configdrive(configdrive, device)
+            totaltime = time.time() - starttime
+            LOG.info('Wrote configdrive to device %(device)s in '
+                     '%(secs)s second(s)',
+                     {'device': device,
+                      'secs': totaltime})
 
     @base.async_command('run_image')
     def run_image(self):

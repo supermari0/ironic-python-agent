@@ -25,6 +25,7 @@ import stevedore
 
 from ironic_python_agent import encoding
 from ironic_python_agent import errors
+from ironic_python_agent import imaging
 from ironic_python_agent.openstack.common import log
 from ironic_python_agent import utils
 
@@ -312,6 +313,14 @@ class HardwareManager(object):
         hardware_info['disks'] = self.list_block_devices()
         hardware_info['memory'] = self.get_memory()
         return hardware_info
+
+    def get_image_manager(self, image_info):
+        """Returns the image manager to use."""
+
+        # Older versions of Ironic do not set 'disk_format' nor
+        # 'container_format'.
+        return imaging.get_image_manager(image_info.get('disk_format'),
+                                         image_info.get('container_format'))
 
 
 class GenericHardwareManager(HardwareManager):

@@ -17,7 +17,7 @@
 set -e
 
 log() {
-  echo "`basename $0`: $@"
+  echo "`basename $0`: $@" > /dev/console
 }
 
 usage() {

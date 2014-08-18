@@ -138,9 +138,11 @@ class ImageDownloadError(RESTError):
 
     message = 'Error downloading image.'
 
-    def __init__(self, image_id):
+    def __init__(self, image_id, reason):
         super(ImageDownloadError, self).__init__()
-        self.details = 'Could not download image with id {0}.'.format(image_id)
+        self.reason = reason
+        self.details = 'Could not download image with id %s: %s' % (image_id,
+                                                                    reason)
 
 
 class ImageChecksumError(RESTError):

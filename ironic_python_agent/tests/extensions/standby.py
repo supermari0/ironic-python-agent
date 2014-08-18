@@ -89,318 +89,119 @@ class TestStandbyExtension(test_base.BaseTestCase):
                           self.agent_extension.cache_image,
                           image_info={'foo': 'bar'})
 
-    def test_image_location(self):
-        image_info = self._build_fake_image_info()
-        location = standby._image_location(image_info)
-        self.assertEqual(location, '/tmp/fake_id')
-
-    @mock.patch(OPEN_FUNCTION_NAME, autospec=True)
-    @mock.patch('ironic_python_agent.utils.execute', autospec=True)
-    def test_write_image(self, execute_mock, open_mock):
+    def test__write_image(self):
         image_info = self._build_fake_image_info()
         device = '/dev/sda'
-        location = standby._image_location(image_info)
-        script = standby._path_to_script('shell/write_image.sh')
-        command = ['/bin/bash', script, location, device]
-        execute_mock.return_value = ('', '')
+        img_mgr_mock = mock.Mock()
 
-        standby._write_image(image_info, device)
-        execute_mock.assert_called_once_with(*command, check_exit_code=[0])
+        self.assertEqual(None, self.agent_extension.cached_image_id)
 
-        execute_mock.reset_mock()
-        execute_mock.return_value = ('', '')
-        execute_mock.side_effect = processutils.ProcessExecutionError
+        self.agent_extension._write_image(img_mgr_mock,
+                                          image_info,
+                                          device)
 
-        self.assertRaises(errors.ImageWriteError,
-                          standby._write_image,
-                          image_info,
-                          device)
+        self.assertEqual(image_info['id'],
+                         self.agent_extension.cached_image_id)
+        img_mgr_mock.write_os_image.assert_called_once_with(
+                image_info, device)
 
-        execute_mock.assert_called_once_with(*command, check_exit_code=[0])
-
-    @mock.patch('gzip.GzipFile', autospec=True)
-    @mock.patch(OPEN_FUNCTION_NAME, autospec=True)
-    @mock.patch('base64.b64decode', autospec=True)
-    def test_write_configdrive_to_file(self, b64_mock, open_mock, gzip_mock):
-        open_mock.return_value.__enter__ = lambda s: s
-        open_mock.return_value.__exit__ = mock.Mock()
-        write_mock = open_mock.return_value.write
-        gzip_read_mock = gzip_mock.return_value.read
-        gzip_read_mock.return_value = 'ungzipped'
-        b64_mock.return_value = 'configdrive_data'
-        filename = standby._configdrive_location()
-
-        standby._write_configdrive_to_file('b64data', filename)
-        open_mock.assert_called_once_with(filename, 'wb')
-        gzip_read_mock.assert_called_once_with()
-        write_mock.assert_called_once_with('ungzipped')
-
-    @mock.patch('os.stat', autospec=True)
-    @mock.patch(('ironic_python_agent.extensions.standby.'
-                 '_write_configdrive_to_file'),
-                autospec=True)
-    @mock.patch(OPEN_FUNCTION_NAME, autospec=True)
-    @mock.patch('ironic_python_agent.utils.execute', autospec=True)
-    def test_write_configdrive_to_partition(self, execute_mock, open_mock,
-                                            configdrive_mock, stat_mock):
+    def test__write_image_already_cached(self):
+        image_info = self._build_fake_image_info()
         device = '/dev/sda'
-        configdrive = standby._configdrive_location()
-        script = standby._path_to_script('shell/copy_configdrive_to_disk.sh')
-        command = ['/bin/bash', script, configdrive, device]
-        execute_mock.return_value = ('', '')
-        stat_mock.return_value.st_size = 5
+        img_mgr_mock = mock.Mock()
 
-        standby._write_configdrive_to_partition(configdrive, device)
-        execute_mock.assert_called_once_with(*command, check_exit_code=[0])
+        self.agent_extension.cached_image_id = image_info['id']
 
-        execute_mock.reset_mock()
-        execute_mock.return_value = ('', '')
-        execute_mock.side_effect = processutils.ProcessExecutionError
+        self.agent_extension._write_image(img_mgr_mock,
+                                          image_info,
+                                          device)
 
-        self.assertRaises(errors.ConfigDriveWriteError,
-                          standby._write_configdrive_to_partition,
-                          configdrive,
-                          device)
+        self.assertEqual(image_info['id'],
+                         self.agent_extension.cached_image_id)
+        self.assertFalse(img_mgr_mock.write_os_image.called)
 
-        execute_mock.assert_called_once_with(*command, check_exit_code=[0])
-
-    @mock.patch('os.stat', autospec=True)
-    @mock.patch(('ironic_python_agent.extensions.standby.'
-                 '_write_configdrive_to_file'),
-                autospec=True)
-    @mock.patch(OPEN_FUNCTION_NAME, autospec=True)
-    @mock.patch('ironic_python_agent.utils.execute', autospec=True)
-    def test_write_configdrive_too_large(self, execute_mock, open_mock,
-                                         configdrive_mock, stat_mock):
+    def test__write_image_already_cached_force(self):
+        image_info = self._build_fake_image_info()
         device = '/dev/sda'
-        configdrive = standby._configdrive_location()
-        stat_mock.return_value.st_size = 65 * 1024 * 1024
+        img_mgr_mock = mock.Mock()
 
-        self.assertRaises(errors.ConfigDriveTooLargeError,
-                          standby._write_configdrive_to_partition,
-                          configdrive,
-                          device)
+        self.agent_extension.cached_image_id = image_info['id']
 
-    @mock.patch('hashlib.md5', autospec=True)
-    @mock.patch(OPEN_FUNCTION_NAME, autospec=True)
-    @mock.patch('requests.get', autospec=True)
-    def test_download_image(self, requests_mock, open_mock, md5_mock):
-        image_info = self._build_fake_image_info()
-        response = requests_mock.return_value
-        response.status_code = 200
-        response.iter_content.return_value = ['some', 'content']
-        open_mock.return_value.__enter__ = lambda s: s
-        open_mock.return_value.__exit__ = mock.Mock()
-        read_mock = open_mock.return_value.read
-        read_mock.return_value = 'content'
-        hexdigest_mock = md5_mock.return_value.hexdigest
-        hexdigest_mock.return_value = image_info['checksum']
+        self.agent_extension._write_image(img_mgr_mock,
+                                          image_info,
+                                          device,
+                                          force=True)
 
-        standby._download_image(image_info)
-        requests_mock.assert_called_once_with(image_info['urls'][0],
-                                              stream=True)
-        write = open_mock.return_value.write
-        write.assert_any_call('some')
-        write.assert_any_call('content')
-        self.assertEqual(write.call_count, 2)
+        self.assertEqual(image_info['id'],
+                         self.agent_extension.cached_image_id)
+        img_mgr_mock.write_os_image.assert_called_once_with(
+                image_info, device)
 
-    @mock.patch('requests.get', autospec=True)
-    def test_download_image_bad_status(self, requests_mock):
-        image_info = self._build_fake_image_info()
-        response = requests_mock.return_value
-        response.status_code = 404
-        self.assertRaises(errors.ImageDownloadError,
-                          standby._download_image,
-                          image_info)
-
-    @mock.patch('ironic_python_agent.extensions.standby._verify_image',
-                autospec=True)
-    @mock.patch(OPEN_FUNCTION_NAME, autospec=True)
-    @mock.patch('requests.get', autospec=True)
-    def test_download_image_verify_fails(self, requests_mock, open_mock,
-                                         verify_mock):
-        image_info = self._build_fake_image_info()
-        response = requests_mock.return_value
-        response.status_code = 200
-        verify_mock.return_value = False
-        self.assertRaises(errors.ImageChecksumError,
-                          standby._download_image,
-                          image_info)
-
-    @mock.patch(OPEN_FUNCTION_NAME, autospec=True)
-    @mock.patch('hashlib.md5', autospec=True)
-    def test_verify_image_success(self, md5_mock, open_mock):
-        image_info = self._build_fake_image_info()
-        hexdigest_mock = md5_mock.return_value.hexdigest
-        hexdigest_mock.return_value = image_info['checksum']
-        image_location = '/foo/bar'
-
-        verified = standby._verify_image(image_info, image_location)
-        self.assertTrue(verified)
-        self.assertEqual(1, md5_mock.call_count)
-
-    @mock.patch(OPEN_FUNCTION_NAME, autospec=True)
-    @mock.patch('hashlib.md5', autospec=True)
-    def test_verify_image_failure(self, md5_mock, open_mock):
-        image_info = self._build_fake_image_info()
-        md5_mock.return_value.hexdigest.return_value = 'wrong hash'
-        image_location = '/foo/bar'
-
-        verified = standby._verify_image(image_info, image_location)
-        self.assertFalse(verified)
-        self.assertEqual(md5_mock.call_count, 1)
-
+    @mock.patch.object(standby.StandbyExtension, '_write_image')
     @mock.patch('ironic_python_agent.hardware.get_manager', autospec=True)
-    @mock.patch('ironic_python_agent.extensions.standby._write_image',
-                autospec=True)
-    @mock.patch('ironic_python_agent.extensions.standby._download_image',
-                autospec=True)
-    def test_cache_image(self, download_mock, write_mock, hardware_mock):
+    def test_cache_image(self, hardware_mock, write_mock):
         image_info = self._build_fake_image_info()
-        download_mock.return_value = None
-        write_mock.return_value = None
-        manager_mock = hardware_mock.return_value
-        manager_mock.get_os_install_device.return_value = 'manager'
+        hw_mgr_mock = hardware_mock.return_value
+        hw_mgr_mock.get_os_install_device.return_value = 'boot_device'
+        hw_mgr_mock.get_image_manager.return_value = 'img_mgr'
+
         async_result = self.agent_extension.cache_image(image_info=image_info)
         async_result.join()
-        download_mock.assert_called_once_with(image_info)
-        write_mock.assert_called_once_with(image_info, 'manager')
-        self.assertEqual(self.agent_extension.cached_image_id,
-                         image_info['id'])
+        write_mock.assert_called_once_with('img_mgr', image_info,
+                                           'boot_device', force=False)
         self.assertEqual('SUCCEEDED', async_result.command_status)
         self.assertEqual(None, async_result.command_result)
 
+    @mock.patch.object(standby.StandbyExtension, '_write_image')
     @mock.patch('ironic_python_agent.hardware.get_manager', autospec=True)
-    @mock.patch('ironic_python_agent.extensions.standby._write_image',
-                autospec=True)
-    @mock.patch('ironic_python_agent.extensions.standby._download_image',
-                autospec=True)
-    def test_cache_image_force(self, download_mock, write_mock, hardware_mock):
+    def test_cache_image_force(self, hardware_mock, write_mock):
         image_info = self._build_fake_image_info()
-        self.agent_extension.cached_image_id = image_info['id']
-        download_mock.return_value = None
-        write_mock.return_value = None
-        manager_mock = hardware_mock.return_value
-        manager_mock.get_os_install_device.return_value = 'manager'
+        hw_mgr_mock = hardware_mock.return_value
+        hw_mgr_mock.get_os_install_device.return_value = 'boot_device'
+        hw_mgr_mock.get_image_manager.return_value = 'img_mgr'
+
         async_result = self.agent_extension.cache_image(
-            image_info=image_info, force=True
-        )
+                image_info=image_info, force=True)
         async_result.join()
-        download_mock.assert_called_once_with(image_info)
-        write_mock.assert_called_once_with(image_info, 'manager')
-        self.assertEqual(self.agent_extension.cached_image_id,
-                         image_info['id'])
+        write_mock.assert_called_once_with('img_mgr', image_info,
+                                           'boot_device', force=True)
         self.assertEqual('SUCCEEDED', async_result.command_status)
         self.assertEqual(None, async_result.command_result)
 
+    @mock.patch.object(standby.StandbyExtension, '_write_image')
     @mock.patch('ironic_python_agent.hardware.get_manager', autospec=True)
-    @mock.patch('ironic_python_agent.extensions.standby._write_image',
-                autospec=True)
-    @mock.patch('ironic_python_agent.extensions.standby._download_image',
-                autospec=True)
-    def test_cache_image_cached(self, download_mock, write_mock,
-                                hardware_mock):
+    def test_prepare_image(self, hardware_mock, write_mock):
         image_info = self._build_fake_image_info()
-        self.agent_extension.cached_image_id = image_info['id']
-        download_mock.return_value = None
-        write_mock.return_value = None
-        manager_mock = hardware_mock.return_value
-        manager_mock.get_os_install_device.return_value = 'manager'
-        async_result = self.agent_extension.cache_image(image_info=image_info)
-        async_result.join()
-        self.assertFalse(download_mock.called)
-        self.assertFalse(write_mock.called)
-        self.assertEqual(self.agent_extension.cached_image_id,
-                         image_info['id'])
-        self.assertEqual('SUCCEEDED', async_result.command_status)
-        self.assertEqual(None, async_result.command_result)
-
-    @mock.patch(('ironic_python_agent.extensions.standby.'
-                 '_write_configdrive_to_partition'),
-                autospec=True)
-    @mock.patch('ironic_python_agent.hardware.get_manager', autospec=True)
-    @mock.patch('ironic_python_agent.extensions.standby._write_image',
-                autospec=True)
-    @mock.patch('ironic_python_agent.extensions.standby._download_image',
-                autospec=True)
-    @mock.patch('ironic_python_agent.extensions.standby._configdrive_location',
-                autospec=True)
-    def test_prepare_image(self,
-                           location_mock,
-                           download_mock,
-                           write_mock,
-                           hardware_mock,
-                           configdrive_copy_mock):
-        image_info = self._build_fake_image_info()
-        location_mock.return_value = '/tmp/configdrive'
-        download_mock.return_value = None
-        write_mock.return_value = None
-        manager_mock = hardware_mock.return_value
-        manager_mock.get_os_install_device.return_value = 'manager'
-        configdrive_copy_mock.return_value = None
+        hw_mgr_mock = hardware_mock.return_value
+        hw_mgr_mock.get_os_install_device.return_value = 'boot_device'
+        img_mgr_mock = hw_mgr_mock.get_image_manager.return_value
 
         async_result = self.agent_extension.prepare_image(
-            image_info=image_info,
-            configdrive='configdrive_data'
-        )
+                image_info=image_info,
+                configdrive='configdrive_data')
         async_result.join()
-
-        download_mock.assert_called_once_with(image_info)
-        write_mock.assert_called_once_with(image_info, 'manager')
-        configdrive_copy_mock.assert_called_once_with('configdrive_data',
-                                                      'manager')
-
+        write_mock.assert_called_once_with(img_mgr_mock, image_info,
+                                           'boot_device')
+        img_mgr_mock.write_configdrive.assert_called_once_with(
+                'configdrive_data', 'boot_device')
         self.assertEqual('SUCCEEDED', async_result.command_status)
         self.assertEqual(None, async_result.command_result)
 
-        download_mock.reset_mock()
-        write_mock.reset_mock()
-        configdrive_copy_mock.reset_mock()
-        # image is now cached, make sure download/write doesn't happen
-        async_result = self.agent_extension.prepare_image(
-            image_info=image_info,
-            configdrive='configdrive_data'
-        )
-        async_result.join()
-
-        self.assertEqual(download_mock.call_count, 0)
-        self.assertEqual(write_mock.call_count, 0)
-        configdrive_copy_mock.assert_called_once_with('configdrive_data',
-                                                      'manager')
-
-        self.assertEqual('SUCCEEDED', async_result.command_status)
-        self.assertEqual(None, async_result.command_result)
-
-    @mock.patch(('ironic_python_agent.extensions.standby.'
-                 '_write_configdrive_to_partition'),
-                autospec=True)
+    @mock.patch.object(standby.StandbyExtension, '_write_image')
     @mock.patch('ironic_python_agent.hardware.get_manager', autospec=True)
-    @mock.patch('ironic_python_agent.extensions.standby._write_image',
-                autospec=True)
-    @mock.patch('ironic_python_agent.extensions.standby._download_image',
-                autospec=True)
-    def test_prepare_image_no_configdrive(self,
-                                          download_mock,
-                                          write_mock,
-                                          hardware_mock,
-                                          configdrive_copy_mock):
+    def test_prepare_image_no_configdrive(self, hardware_mock, write_mock):
         image_info = self._build_fake_image_info()
-        download_mock.return_value = None
-        write_mock.return_value = None
-        manager_mock = hardware_mock.return_value
-        manager_mock.get_os_install_device.return_value = 'manager'
-        configdrive_copy_mock.return_value = None
+        hw_mgr_mock = hardware_mock.return_value
+        hw_mgr_mock.get_os_install_device.return_value = 'boot_device'
+        img_mgr_mock = hw_mgr_mock.get_image_manager.return_value
 
         async_result = self.agent_extension.prepare_image(
-            image_info=image_info,
-            configdrive=None
-        )
+                image_info=image_info,
+                configdrive=None)
         async_result.join()
-
-        download_mock.assert_called_once_with(image_info)
-        write_mock.assert_called_once_with(image_info, 'manager')
-
-        self.assertEqual(configdrive_copy_mock.call_count, 0)
+        write_mock.assert_called_once_with(img_mgr_mock, image_info,
+                                           'boot_device')
+        self.assertFalse(img_mgr_mock.write_configdrive.called)
         self.assertEqual('SUCCEEDED', async_result.command_status)
         self.assertEqual(None, async_result.command_result)
 
