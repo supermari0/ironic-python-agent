@@ -21,6 +21,7 @@ import six
 import StringIO
 import time
 
+from ironic_python_agent.common import metrics
 from ironic_python_agent import errors
 from ironic_python_agent.extensions import base
 from ironic_python_agent import hardware
@@ -29,6 +30,7 @@ from ironic_python_agent.openstack.common import processutils
 from ironic_python_agent import utils
 
 LOG = log.getLogger(__name__)
+METRICS = metrics.getLogger(__name__)
 
 
 def _configdrive_location():
@@ -178,15 +180,19 @@ class StandbyExtension(base.BaseAgentExtension):
         self.cached_image_id = None
 
     @base.async_command('cache_image', _validate_image_info)
+    @METRICS.instrument('cache_image')
     def cache_image(self, image_info=None, force=False):
         device = hardware.get_manager().get_os_install_device()
 
         if self.cached_image_id != image_info['id'] or force:
-            _download_image(image_info)
-            _write_image(image_info, device)
+            with METRICS.instrument_context('cache_image', '_download_image'):
+                _download_image(image_info)
+            with METRICS.instrument_context('cache_image', '_write_image'):
+                _write_image(image_info, device)
             self.cached_image_id = image_info['id']
 
     @base.async_command('prepare_image', _validate_image_info)
+    @METRICS.instrument('prepare_image')
     def prepare_image(self,
                       image_info=None,
                       configdrive=None):
@@ -194,14 +200,20 @@ class StandbyExtension(base.BaseAgentExtension):
 
         # don't write image again if already cached
         if self.cached_image_id != image_info['id']:
-            _download_image(image_info)
-            _write_image(image_info, device)
+            with METRICS.instrument_context('prepare_image',
+                                            '_download_image'):
+                _download_image(image_info)
+            with METRICS.instrument_context('prepare_image', '_write_image'):
+                _write_image(image_info, device)
             self.cached_image_id = image_info['id']
 
         if configdrive is not None:
-            _write_configdrive_to_partition(configdrive, device)
+            with METRICS.instrument_context(
+                    'cache_image', '_write_configdrive_to_partition'):
+                _write_configdrive_to_partition(configdrive, device)
 
     @base.async_command('run_image')
+    @METRICS.instrument('run_image')
     def run_image(self):
         script = _path_to_script('shell/reboot.sh')
         LOG.info('Rebooting system')
