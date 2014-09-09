@@ -15,20 +15,39 @@
 import os
 import random
 import select
+import socket
 import threading
 import time
 
+from oslo.config import cfg
 import pkg_resources
 from stevedore import extension
 from wsgiref import simple_server
 
 from ironic_python_agent.api import app
+from ironic_python_agent.common import metrics
 from ironic_python_agent import encoding
 from ironic_python_agent import errors
 from ironic_python_agent.extensions import base
 from ironic_python_agent import hardware
 from ironic_python_agent import ironic_api_client
 from ironic_python_agent.openstack.common import log
+
+
+service_opts = [
+    cfg.StrOpt('host',
+               default=socket.getfqdn(),
+               help='Name of this node.  This can be an opaque identifier.  '
+               'It is not necessarily a hostname, FQDN, or IP address. '
+               'However, the node name must be valid within '
+               'an AMQP key, and if using ZeroMQ, a valid '
+               'hostname, FQDN, or IP address.'),
+    cfg.StrOpt('node_uuid',
+               help='This node\'s Ironic UUID. This will be set automatically '
+                    'when the node boots by querying Ironic.'),
+]
+
+cfg.CONF.register_opts(service_opts)
 
 
 def _time():
@@ -280,7 +299,19 @@ class IronicPythonAgent(base.ExecuteCommandMixin):
                 starting_interval=self.lookup_interval)
 
         self.node = content['node']
+
+        # Save node uuid to CONF so we can use it later
+        if self.node.get('uuid'):
+            cfg.CONF.node_uuid = self.node['uuid']
+
         self.heartbeat_timeout = content['heartbeat_timeout']
+
+        # Update config with values from Ironic
+        config = content.get('config', {})
+        if config.get('metrics'):
+            self.log.info('Updating metrics config with values from Ironic: {}'
+                          .format(config))
+            metrics.set_config(config['metrics'])
 
         wsgi = simple_server.make_server(
             self.listen_address[0],
