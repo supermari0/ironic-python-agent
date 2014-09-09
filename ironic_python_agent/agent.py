@@ -23,6 +23,7 @@ from stevedore import extension
 from wsgiref import simple_server
 
 from ironic_python_agent.api import app
+from ironic_python_agent.common import metrics
 from ironic_python_agent import encoding
 from ironic_python_agent import errors
 from ironic_python_agent.extensions import base
@@ -281,6 +282,10 @@ class IronicPythonAgent(base.ExecuteCommandMixin):
 
         self.node = content['node']
         self.heartbeat_timeout = content['heartbeat_timeout']
+
+        config = content.get('config', {})
+        if config.get('metrics'):
+            metrics.set_config(config['metrics'])
 
         wsgi = simple_server.make_server(
             self.listen_address[0],
