@@ -184,6 +184,25 @@ class HardwareManager(object):
             },
         ]
 
+    def get_verification_steps(self):
+        """Get a list of verifications steps with priority
+
+        Returns a list of dicts of the following form:
+        {'name': The name of the verification step, used in the results.
+         'priority': the order to call starting at 1. If two steps share the
+                     same priority, their order is undefined.
+         'function': the HardwareManager function to call.
+        }
+        :returns: a default list of verification steps, as a list of
+                  dictionaries
+        """
+        return [
+            {
+                'priority': 10,
+                'function': 'verify_properties'
+            },
+        ]
+
     def erase_devices(self, driver_info):
         """Erase any device that holds user data.
 
@@ -267,6 +286,40 @@ class HardwareManager(object):
                     'reboot_requested': step.get('reboot_requested'),
                     'hardware_manager_version': self.HARDWARE_MANAGER_VERSION
                 }
+
+    def verify_hardware(self, properties, ports, extra=None):
+        """Given data about a node, attempt to verify the data is correct.
+
+        :param properties: all or a subset of node.properties
+        :param ports: a dict representation of Ports connected to the node
+        :param extra: an extra dictionary, for vendor specific data
+        :raises VerificationException: if any of the steps determine the node
+                does not match the given data
+        :raises VerificationStepDoesNotExist: if a given step isn't a function
+                of the hardware manager
+        :return: The output of each verification step, as listed in
+                 HardwareManager.get_verification_steps()
+        """
+        results = {}
+        verification_steps = self.get_verification_steps()
+        for step in _get_sorted_steps(verification_steps):
+            # Get the function from the hardware manager
+            try:
+                func = getattr(self, step['function'])
+            except AttributeError:
+                raise errors.VerificationError('Step %s does not exist' %
+                                               step['function'])
+
+            # Run the function, save to result to results
+            try:
+                results[step['function']] = func(properties, ports, extra)
+            # Reraise verification failed
+            except errors.VerificationFailed:
+                raise
+            # Catch all other errors as general errors
+            except Exception as e:
+                raise errors.VerificationError(str(e))
+        return results
 
     def list_hardware_info(self):
         hardware_info = {}
@@ -456,6 +509,69 @@ class GenericHardwareManager(HardwareManager):
 
     def update_firmware(self, driver_info):
         pass
+
+    def verify_properties(self, properties, ports=None, extra=None):
+        """Verify that the node's properties match the hardware
+
+        :param properties: all or a subset of node.properties
+        :param ports: a dict representation of Ports connected to the node
+        :param extra: an extra dictionary, for vendor specific data
+        :return:
+        """
+        hardware = self.list_hardware_info()
+        # Ensure possibly overridden list_hardware_info return correct results
+        for key in ('cpu', 'memory', 'disks'):
+            if not hardware.get(key):
+                raise errors.VerificationError(
+                    'list_hardware_info needs to return cpu, memory and '
+                    'disks keys')
+        self._verify_cpu_count(properties, hardware)
+        self._verify_memory_size(properties, hardware)
+        self._verify_disks_size(properties, hardware)
+
+    def _verify_cpu_count(self, properties, hardware):
+        """Verifies CPU count is the same as listed in node.properties."""
+        given = hardware['cpu'].count
+        actual = properties.get('cpus', 0)
+
+        if given != actual:
+            raise errors.VerificationFailed(
+                'Node CPU count %(given)s does not match detected count '
+                '%(actual)s' % {'given': given, 'actual': actual})
+
+    def _verify_memory_size(self, properties, hardware):
+        """Verifies memory size is the same as listed in node.properties."""
+        # Convert bytes to MB
+        given = hardware['memory'].total / (1024 * 1024)
+        actual = properties.get('memory_mb', 0)
+
+        if given != actual:
+            raise errors.VerificationFailed(
+                'Node memory size %(given)s does not match detected '
+                'count %(actual)s' % {'given': given, 'actual': actual})
+
+    def _verify_disks_size(self, properties, hardware):
+        """Verifies disk size is the same as listed in node.properties."""
+        actual = properties.get('local_gb', 0)
+        # TODO(JoshNang) fix listing hardware twice
+        name = self.get_os_install_device()
+        disk = None
+        for device in hardware['disks']:
+            if device.name == name:
+                disk = device
+                break
+
+        # Make sure not to skip if this is a diskless system
+        if not disk and actual > 0:
+            raise errors.VerificationFailed(
+                'Could not find a disk to match to local_gb.')
+        # Convert bytes to GB
+
+        given = disk.size / (1024 * 1024 * 1024)
+        if given != actual:
+            raise errors.VerificationFailed(
+                'Node disk size %(given)s does not match detected '
+                'size %(actual)s' % {'given': given, 'actual': actual})
 
 
 def _get_sorted_steps(steps):

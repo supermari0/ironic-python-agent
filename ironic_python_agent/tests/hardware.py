@@ -603,3 +603,121 @@ class TestDecommission(test_base.BaseTestCase):
         ]
         sorted_steps = hardware._get_sorted_steps(unsorted_steps)
         self.assertEqual(expected_steps, sorted_steps)
+
+
+class TestVerify(test_base.BaseTestCase):
+    def setUp(self):
+        super(TestVerify, self).setUp()
+        self.properties = {
+            "memory_mb": 524288,
+            "cpu_arch": "amd64",
+            "local_gb": 32,
+            "cpus": 12
+        }
+        self.hardware_manager = hardware.GenericHardwareManager()
+        # 32GB SSD
+        self.disk = hardware.BlockDevice(
+            '/dev/sda', 'super_duper_solid_state', 32 * 1024 * 1024 * 1024, 0)
+        # 512 GB of RAM
+        self.memory = hardware.Memory(549755813888)
+        # 12 fast cores
+        self.cpu = hardware.CPU('Intel Xeon E5-2630 v2', '2600.058', 12)
+        self.interface = hardware.NetworkInterface('eth0', 'aa:bb:cc:dd:ee:ff')
+        self.list_hardware = {
+            'interfaces': [self.interface],
+            'cpu': self.cpu,
+            'disks': [self.disk],
+            'memory': self.memory
+        }
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager.'
+                'verify_properties')
+    def test_verify_hardware(self, verify_mock):
+        verify_mock.return_value = None
+        results = self.hardware_manager.verify_hardware({}, {})
+        verify_mock.assert_called_with({}, {}, None)
+        self.assertEqual(dict(verify_properties=None), results)
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager.'
+                'verify_properties')
+    def test_verify_hardware_bad_step(self, verify_mock):
+        self.hardware_manager.get_verification_steps = mock.Mock()
+        self.hardware_manager.get_verification_steps.return_value = [
+            {
+                'priority': 10,
+                'function': 'not_a_function'
+            }
+        ]
+        self.assertRaises(
+            errors.VerificationError,
+            self.hardware_manager.verify_hardware,
+            {},
+            {})
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager.'
+                'verify_properties')
+    def test_verify_hardware_failed(self, verify_mock):
+        verify_mock.side_effect = errors.VerificationFailed('Mock failure')
+        self.assertRaises(
+            errors.VerificationFailed,
+            self.hardware_manager.verify_hardware,
+            {},
+            {})
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager.'
+                'verify_properties')
+    def test_verify_hardware_error(self, verify_mock):
+        verify_mock.side_effect = KeyError()
+        self.assertRaises(
+            errors.VerificationError,
+            self.hardware_manager.verify_hardware,
+            {},
+            {})
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager.'
+                'get_os_install_device')
+    @mock.patch('ironic_python_agent.hardware.HardwareManager.'
+                'list_hardware_info')
+    def test_verify_properties(self, list_mock, install_mock):
+        list_mock.return_value = self.list_hardware
+        install_mock.return_value = '/dev/sda'
+
+        result = self.hardware_manager.verify_properties(self.properties)
+        self.assertIsNone(result)
+
+    def test__verify_cpu_count_fail(self):
+        self.properties['cpus'] = 20
+        self.assertRaises(
+            errors.VerificationFailed,
+            self.hardware_manager._verify_cpu_count,
+            self.properties,
+            self.list_hardware)
+
+    def test__verify_memory_size_fail(self):
+        self.properties['memory_mb'] = 32768
+        self.assertRaises(
+            errors.VerificationFailed,
+            self.hardware_manager._verify_memory_size,
+            self.properties,
+            self.list_hardware)
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager.'
+                'get_os_install_device')
+    def test__verify_disks_size_fail(self, install_mock):
+        install_mock.return_value = '/dev/sda'
+        self.properties['local_gb'] = 10
+        self.assertRaises(
+            errors.VerificationFailed,
+            self.hardware_manager._verify_disks_size,
+            self.properties,
+            self.list_hardware)
+
+    @mock.patch('ironic_python_agent.hardware.GenericHardwareManager.'
+                'get_os_install_device')
+    def test__verify_disks_size_no_name(self, install_mock):
+        install_mock.return_value = '/dev/not_sda'
+        self.assertRaises(
+            errors.VerificationFailed,
+            self.hardware_manager._verify_disks_size,
+            self.properties,
+            self.list_hardware)

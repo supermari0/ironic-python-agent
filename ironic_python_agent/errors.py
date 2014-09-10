@@ -267,3 +267,14 @@ class DecommissionError(RESTError):
 
     def __init__(self, message):
         self.message = message
+
+
+class VerificationError(RESTError):
+    def __init__(self, message):
+        self.message = message
+
+
+class VerificationFailed(VerificationError):
+    def __init__(self, message):
+        self.status_code = 409
+        self.message = ('Verification failed because: %s' % message)
