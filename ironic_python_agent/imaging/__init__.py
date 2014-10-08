@@ -13,8 +13,10 @@
 # limitations under the License.
 
 from ironic_python_agent.imaging import qemu_img
+from ironic_python_agent.imaging import vhd_util
 
-_DISK_FORMAT_MAPPING = {'qcow2': qemu_img.QemuImgImageManager}
+_DISK_FORMAT_MAPPING = {'qcow2': qemu_img.QemuImgImageManager,
+                        'vhd': vhd_util.VHDUtilImageManager}
 
 
 def get_image_manager(disk_format, container_format):

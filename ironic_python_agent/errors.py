@@ -156,6 +156,16 @@ class ImageChecksumError(RESTError):
         self.details = self.details.format(image_id)
 
 
+class ImageFormatError(RESTError):
+    """Error raised when image format is not understood."""
+    message = 'Error parsing image.'
+
+    def __init__(self, details):
+        super(ImageFormatError, self,).__init__()
+        self.details = 'Image format not understood or corrupt: {0}'
+        self.details = self.details.format(details)
+
+
 class ImageWriteError(RESTError):
     """Error raised when an image cannot be written to a device."""
 
