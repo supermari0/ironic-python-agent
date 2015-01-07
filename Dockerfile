@@ -11,7 +11,7 @@ RUN apt-get update && \
     apt-get -y upgrade && \
     apt-get install -y --no-install-recommends python2.7 python2.7-dev \
         python-pip qemu-utils parted hdparm util-linux genisoimage git gcc \
-        bash coreutils && \
+        bash coreutils passwd && \
     apt-get -y autoremove && \
     apt-get clean
 
