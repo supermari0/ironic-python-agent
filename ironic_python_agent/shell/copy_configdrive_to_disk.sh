@@ -30,8 +30,8 @@ fail() {
 usage() {
   [[ -z "$1" ]] || echo -e "USAGE ERROR: $@\n"
   echo "`basename $0`: CONFIGDRIVE DEVICE"
-  echo "  - This script injects CONFIGDRIVE contents as an iso9660"
-  echo "    filesystem on a partition at the end of DEVICE."
+  echo "  - This script injects CONFIGDRIVE contents as a filesystem"
+  echo "    on a partition at the end of DEVICE."
   exit 1
 }
 
@@ -57,9 +57,14 @@ if [[ $? == 0 ]]; then
   log "Existing configdrive found on ${DEVICE} at ${EXISTING_PARTITION}"
   ISO_PARTITION=$EXISTING_PARTITION
 else
-  # Create small partition at the end of the device
-  log "Adding configdrive partition to $DEVICE"
-  parted -a optimal -s -- $DEVICE mkpart primary ext2 -64MiB -0 || fail "creating configdrive on ${DEVICE}"
+  # Create partition matching the size of the configdrive at the end of the
+  # device
+  BYTES="$(stat -c %s $CONFIGDRIVE)" || fail "finding size of configdrive"
+  # Round up to nearest megabyte for partition alignment
+  CONFIGDRIVE_MB=$(awk 'BEGIN {$CONFIGDRIVE_BYTES=int($BYTES / (1024 ^ 2)) + 1; print $BYTES; exit;}' )
+  CONFIGDRIVE_MB+="MiB"
+  log "Adding configdrive partition to $DEVICE of size $CONFIGDRIVE_MB megabytes"
+  parted -a optimal -s -- $DEVICE mkpart primary ext2 -$CONFIGDRIVE_MB -0 || fail "creating configdrive on ${DEVICE}"
 
   # Find partition we just created
   # Dump all partitions, ignore empty ones, then get the last partition ID
