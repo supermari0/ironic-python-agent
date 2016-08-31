@@ -31,8 +31,8 @@ class CleanExtension(base.BaseAgentExtension):
         :param node: A dict representation of a node
         :param ports: A dict representation of ports attached to node
 
-        :returns: A list of clean steps with keys step, priority, and
-            reboot_requested
+        :returns: A list of clean steps with keys step, priority,
+            reboot_requested, and timeout
         """
         LOG.debug('Getting clean steps, called with node: %(node)s, '
                   'ports: %(ports)s', {'node': node, 'ports': ports})

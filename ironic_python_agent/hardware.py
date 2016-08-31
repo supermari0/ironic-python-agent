@@ -371,6 +371,11 @@ class HardwareManager(object):
                         (i.e firmware update), for such steps this parameter
                         should be set to False. If no value is set for this
                         parameter, Ironic will consider False (non-abortable).
+           'timeout': Integer value. Number of seconds to allow the clean step
+                      to execute before ironic places this node in a "clean
+                      failed" provision state. If no value is set for this
+                      parameter, ironic will consider it 0 (don't have a
+                      specific timeout for this clean step).
           }
 
 
@@ -926,14 +931,16 @@ class GenericHardwareManager(HardwareManager):
                 'priority': 10,
                 'interface': 'deploy',
                 'reboot_requested': False,
-                'abortable': True
+                'abortable': True,
+                'timeout': 0
             },
             {
                 'step': 'erase_devices_metadata',
                 'priority': 99,
                 'interface': 'deploy',
                 'reboot_requested': False,
-                'abortable': True
+                'abortable': True,
+                'timeout': 0
             }
         ]
 
