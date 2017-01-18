@@ -188,6 +188,8 @@ class IronicPythonAgent(base.ExecuteCommandMixin):
         self.network_interface = network_interface
         self.standalone = standalone
         self.hardware_initialization_delay = hardware_initialization_delay
+        # IPA will stop serving requests and exit after this is set to False
+        self.serve_api = True
 
     def get_status(self):
         """Retrieve a serializable status.
@@ -312,6 +314,15 @@ class IronicPythonAgent(base.ExecuteCommandMixin):
             LOG.warning("No valid network interfaces found. "
                         "Node lookup will probably fail.")
 
+    def serve_api(self):
+        """Serve the API until an extension terminates it."""
+        server = simple_server.WSGIServer((self.listen_address.hostname,
+                                           self.listen_address.port),
+                                          simple_server.WSGIRequestHandler)
+        server.set_app(self.api)
+        while self.serve_api:
+            server.handle_request()
+
     def run(self):
         """Run the Ironic Python Agent."""
         # Get the UUID so we can heartbeat to Ironic. Raises LookupNodeError
@@ -365,20 +376,11 @@ class IronicPythonAgent(base.ExecuteCommandMixin):
                 LOG.error('Neither ipa-api-url nor inspection_callback_url'
                           'found, please check your pxe append parameters.')
 
-        wsgi = simple_server.make_server(
-            self.listen_address.hostname,
-            self.listen_address.port,
-            self.api,
-            server_class=simple_server.WSGIServer)
-
         if not self.standalone and self.api_url:
             # Don't start heartbeating until the server is listening
             self.heartbeater.start()
 
-        try:
-            wsgi.serve_forever()
-        except BaseException:
-            LOG.exception('shutting down')
+        self.serve_api()
 
         if not self.standalone and self.api_url:
             self.heartbeater.stop()
